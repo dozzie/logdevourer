@@ -1,0 +1,16 @@
+Source: logdevourer
+Maintainer: Stanislaw Klekot <dozzie@k.pl>
+Section: admin
+Priority: optional
+Build-Depends: debhelper (>> 7.0.0), make, python-setuptools
+X-Python-Version: >= 2.6
+
+Package: logdevourer
+Architecture: all
+Depends: ${shlibs:Depends}, ${misc:Depends}, ${python:Depends}
+Provides: ${python:Provides}
+Description: Log parsing and normalizing daemon
+ logdevourer is a log parsing and normalizing daemon. It converts string blob
+ log messages (mainly from syslog files) into structured data and sends them
+ as JSON through TCP, UDP, or UNIX socket to a service like messenger from
+ Seismometer Toolbox.
