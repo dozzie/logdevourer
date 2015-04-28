@@ -1,0 +1,11 @@
+# Configuration file specifying what logs to follow, where to send them
+# and where to find parsing rulebase
+#LOGDEVOURER_CONFIG=/etc/logdevourer/logdevourer.conf
+
+# Directory to store position in log files
+#LOGDEVOURER_STATE_DIR=/var/lib/logdevourer
+
+# User/group to run as (defaults to root:root)
+# Remember to run chown on $LOGDEVOURER_STATE_DIR
+#LOGDEVOURER_USER=
+#LOGDEVOURER_GROUP=

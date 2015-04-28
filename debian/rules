@@ -1,7 +1,15 @@
 #!/usr/bin/make -f
 
+# not that there are more packages...
+PACKAGE := $(firstword $(shell dh_listpackages))
+
 %:
 	dh $@
 
+override_dh_installinit:
+	dh_installinit --no-start --restart-after-upgrade
+
 override_dh_auto_install:
-	python setup.py install --root=debian/logdevourer --install-layout=deb --install-scripts=/usr/sbin
+	python setup.py install --root=$(CURDIR)/debian/$(PACKAGE) --install-layout=deb --install-scripts=/usr/sbin
+	install -D -m 644 logdevourer.conf.example $(CURDIR)/debian/$(PACKAGE)/etc/logdevourer/logdevourer.conf.example
+	install -D -m 644 syslog.rules.example $(CURDIR)/debian/$(PACKAGE)/etc/logdevourer/syslog.rules.example
