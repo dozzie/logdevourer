@@ -2,6 +2,11 @@
 # and where to find parsing rulebase
 #LOGDEVOURER_CONFIG=/etc/logdevourer/logdevourer.conf
 
+# Logging configuration. Empty path (the default value) means default syslog
+# configuration.
+#LOGDEVOURER_LOG_CONFIG=/etc/logdevourer/logdevourer.logging.conf
+#LOGDEVOURER_LOG_CONFIG=
+
 # Directory to store position in log files
 #LOGDEVOURER_STATE_DIR=/var/lib/logdevourer
 
