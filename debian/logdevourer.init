@@ -55,7 +55,7 @@ do_start() {
 
   start-stop-daemon --start --quiet > /dev/null \
     --pidfile $PIDFILE \
-    --exec $DAEMON --test || return 1
+    --name ${DAEMON##*/} --exec /usr/bin/python --test || return 1
   start-stop-daemon --start --quiet \
     --pidfile $PIDFILE \
     --exec $DAEMON -- \
