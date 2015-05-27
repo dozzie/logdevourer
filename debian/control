@@ -7,7 +7,8 @@ X-Python-Version: >= 2.6
 
 Package: logdevourer
 Architecture: all
-Depends: ${shlibs:Depends}, ${misc:Depends}, ${python:Depends}
+Depends: ${shlibs:Depends}, ${misc:Depends}, ${python:Depends},
+ python-liblognorm
 Provides: ${python:Provides}
 Description: Log parsing and normalizing daemon
  logdevourer is a log parsing and normalizing daemon. It converts string blob
