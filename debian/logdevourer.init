@@ -19,6 +19,8 @@ PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
 
 LOGDEVOURER_CONFIG=/etc/logdevourer/logdevourer.conf
+#LOGDEVOURER_LOG_CONFIG=/etc/logdevourer/logdevourer.logging.conf
+LOGDEVOURER_LOG_CONFIG=
 LOGDEVOURER_STATE_DIR=/var/lib/logdevourer
 LOGDEVOURER_USER=
 LOGDEVOURER_GROUP=
@@ -61,6 +63,7 @@ do_start() {
         ${LOGDEVOURER_USER:+--user $LOGDEVOURER_USER} \
         ${LOGDEVOURER_GROUP:+--group $LOGDEVOURER_GROUP} \
         --config $LOGDEVOURER_CONFIG \
+        ${LOGDEVOURER_LOG_CONFIG:+--logging $LOGDEVOURER_LOG_CONFIG} \
         --state-dir $LOGDEVOURER_STATE_DIR \
         --pid-file $PIDFILE || return 2
 }
