@@ -23,7 +23,7 @@ parser.add_option(
 parser.add_option(
     "-l", "--logging", dest = "logging_config",
     default = None,
-    help = "configuration file", metavar = "FILE",
+    help = "logging configuration file", metavar = "FILE",
 )
 parser.add_option(
     "-s", "--state-dir", dest = "state_dir",
@@ -33,6 +33,13 @@ parser.add_option(
 parser.add_option(
     "-p", "--pid-file", dest = "pid_file", default = None,
     help = "PID file for going daemon", metavar = "FILE",
+)
+parser.add_option(
+    "-i", "--stdio", dest = "stdio_only",
+    action = "store_true", default = False,
+    help = "read from STDIN, write to STDOUT, ignoring any sources and"
+           " destinations from configuration file"
+           " (--state-dir is also not used)",
 )
 parser.add_option(
     "-d", "--daemon", dest = "daemonize",
@@ -57,6 +64,17 @@ parser.add_option(
 if options.logging_config is not None:
     with open(options.logging_config) as cf:
         logging_config = yaml.safe_load(cf)
+elif options.stdio_only:
+    logging_config = {
+        "version": 1,
+        "root": {
+            "level": "NOTSET",
+            "handlers": ["sink"],
+        },
+        "handlers": {
+            "sink": { "class": "logdevd.logging_handlers.NullHandler" },
+        },
+    }
 else:
     logging_config = {
         "version": 1,
@@ -66,15 +84,15 @@ else:
         },
         "formatters": {
             "syslog_formatter": {
-                "format": "logdevd[%(process)d]: [%(name)s] %(message)s",
+                "format": "[%(name)s] %(message)s",
             },
         },
         "handlers": {
             "syslog": {
-                "class": "logging.handlers.SysLogHandler",
+                "class": "logdevd.logging_handlers.SysLogHandler",
                 "formatter": "syslog_formatter",
-                "address": "/dev/log",
                 "facility": "syslog",
+                "process_name": "logdevd",
             },
         },
     }
@@ -91,17 +109,34 @@ dictConfig(logging_config)
 # main loop, along with state variables and options {{{
 
 class Daemon:
-    def __init__(self, config, state_dir):
+    def __init__(self, config, state_dir, stdio_only = False):
         self.config = config
+        self.stdio_only = stdio_only
         self.log_unparsed = False
         self.send_unparsed = True
         self.state_dir = state_dir
         self.poll_h = None
+        # special list for sources that are plain files, so they're not
+        # polled (at EOF poll immediately returns "ready to read")
+        self.unpollable_opened_sources = []
         self.sources = []
         self.destinations = []
         self.lognorm = None
         # TODO: raise exception on error (no previous config to fall back to)
         self.reload()
+
+    def monitor_source(self, source):
+        if source.poll_makes_sense():
+            self.poll_h.add(source)
+        else:
+            self.unpollable_opened_sources.append(source)
+
+    def unmonitor_source(self, source):
+        self.poll_h.remove(source)
+        try:
+            self.unpollable_opened_sources.remove(source)
+        except ValueError:
+            pass # it's OK if `source' is not in this list
 
     def reload(self):
         logger = logging.getLogger("configuration")
@@ -111,13 +146,21 @@ class Daemon:
             logger.info("flushing buffers in all sources")
         for source in self.sources:
             source.flush()
+            source.close()
+        del self.unpollable_opened_sources[:]
+        self.poll_h = logdevd.poll.Poll()
         # TODO: try-catch
         logger.info("loading config file %s", self.config)
-        cfg = logdevd.config.load(self.config, self.state_dir)
+        cfg = logdevd.config.load(self.config, self.state_dir, self.stdio_only)
         # TODO: convergence
         (self.sources, self.destinations, self.lognorm, config) = cfg
-        self.poll_h = logdevd.poll.Poll()
-        self.reopen_sources_if_necessary()
+        for source in self.sources:
+            if not source.is_opened():
+                source.open()
+            if not source.is_opened():
+                continue
+            logger.info("added source %s", source)
+            self.monitor_source(source)
         self.send_unparsed = config["options"].get("send_unparsed", True)
         self.log_unparsed  = config["options"].get("log_unparsed", False)
 
@@ -127,29 +170,44 @@ class Daemon:
         # missing), it would spam logfile with meaningless entries
         logger = logging.getLogger("sources")
         for source in self.sources:
-            if source not in self.poll_h:
+            # if it's not opened, it's not present in self.poll_h nor in
+            # self.unpollable_opened_sources
+            if not source.is_opened():
                 # add missing log sources
                 source.open()
-                if self.poll_h.add(source):
+                if source.is_opened():
                     logger.info("added source %s", source)
+                    self.monitor_source(source)
             elif source.reopen_necessary():
+                self.unmonitor_source(source)
                 # reopen files that need it
-                self.poll_h.remove(source)
                 source.reopen()
-                if self.poll_h.add(source):
+                if source.is_opened():
                     logger.info("reopened source %s", source)
+                    self.monitor_source(source)
                 else:
                     logger.info("closed source %s", source)
 
     def normalize(self, log_line):
         result = self.lognorm.normalize(log_line)
-        # XXX: "*" field is expected to be JSON string, since liblognorm 1.1.1
-        # doesn't have "json" field type yet
+        # XXX: "*" field can be either a string containing JSON hash or
+        # an already parsed dictionary; this is to support liblognorm both
+        # 1.1.1 and later versions, with "json" field type being introduced in
+        # 1.1.2
         if "*" in result:
+            json_field = result.pop("*")
+            old_result = result
             try:
-                result.update(json.loads(result.pop("*")))
+                if isinstance(json_field, dict):
+                    result = json_field
+                else: # should be string
+                    result = json.loads(json_field)
+                result.update(old_result)
             except:
-                return None
+                result = {
+                    "originalmsg": log_line,
+                    "unparsed-data": json_field,
+                }
         # remains after parsing the log line
         if "originalmsg" in result and "unparsed-data" in result:
             if self.log_unparsed:
@@ -162,6 +220,9 @@ class Daemon:
         line = json.dumps(message, sort_keys = True)
         for d in self.destinations:
             d.send(line)
+
+    def filecount(self):
+        return self.poll_h.count()
 
     def poll(self, timeout):
         return self.poll_h.poll(timeout)
@@ -183,7 +244,7 @@ class Daemon:
 logger = logging.getLogger()
 
 logger.info("preparing daemon's state")
-daemon = Daemon(options.config, options.state_dir)
+daemon = Daemon(options.config, options.state_dir, options.stdio_only)
 
 signal.signal(signal.SIGHUP, daemon.sighandler)
 signal.signal(signal.SIGINT, daemon.sighandler)
@@ -212,10 +273,10 @@ pid_file.claim()
 #-----------------------------------------------------------------------------
 
 logger.info("entering read-parse-send loop")
-while True:
+while daemon.filecount() > 0 or not options.stdio_only:
     # check every 250ms for sources that need reopening
     canread = daemon.poll(250)
-    for source in canread:
+    for source in canread + daemon.unpollable_opened_sources:
         for line in source.try_readlines():
             message = daemon.normalize(line)
             if message is not None:

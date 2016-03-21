@@ -4,11 +4,15 @@ import socket
 import errno
 import os
 import sha
+import fcntl
 
 #-----------------------------------------------------------------------------
 
 class Source(object):
     def open(self):
+        raise NotImplementedError()
+
+    def close(self):
         raise NotImplementedError()
 
     def reopen(self):
@@ -20,11 +24,75 @@ class Source(object):
     def flush(self):
         pass
 
+    def poll_makes_sense(self):
+        return True
+
+    def is_opened(self):
+        return (self.fileno() is not None)
+
     def fileno(self):
         raise NotImplementedError()
 
     def try_readlines(self):
         raise NotImplementedError()
+
+#-----------------------------------------------------------------------------
+
+class FileHandleSource(Source):
+    def __init__(self, fh = None):
+        self.fh = fh
+        self.fd = self.fh.fileno()
+        flags = fcntl.fcntl(self.fd, fcntl.F_GETFL)
+        fcntl.fcntl(self.fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+        self.need_reopen = False
+        self.read_buffer = []
+
+    def reopen(self):
+        if self.fh is None:
+            return
+        self.fh.close()
+        self.fh = None
+        self.need_reopen = False
+
+    def reopen_necessary(self):
+        return self.need_reopen
+
+    def flush(self):
+        pass
+
+    def fileno(self):
+        if self.fh is not None:
+            return self.fd
+        else:
+            return None
+
+    def try_readlines(self):
+        if self.fh is None:
+            return
+
+        try:
+            while True:
+                read = self.fh.read(1024)
+                if read == "": # EOF
+                    self.need_reopen = True
+                    break # FIXME: what with `self.read_buffer'?
+                if "\n" in read:
+                    read = "".join(self.read_buffer) + read
+                    del self.read_buffer[:]
+
+                    lines = read.split("\n")
+                    if lines[-1] != "":
+                        self.read_buffer.append(lines[-1])
+                    for line in lines[:-1]:
+                        yield line
+        except IOError, e:
+            if e.errno == errno.EWOULDBLOCK or e.errno == errno.EAGAIN:
+                pass # OK, just no more data to read at the moment
+            else:
+                raise # other error, rethrow
+
+    def __str__(self):
+        return "filehandle: %d" % (self.fd)
 
 #-----------------------------------------------------------------------------
 
@@ -86,9 +154,14 @@ class FileSource(Source):
         position_filename = os.path.join(self.state_dir, position_filename)
         self.position_file = FileSource.PositionFile(position_filename)
 
-    def __del__(self):
+    def close(self):
         if self.fh is not None:
             self._write_position()
+            self.fh.close()
+            self.fh = None
+
+    def __del__(self):
+        self.close()
 
     def open(self):
         try:
@@ -123,6 +196,9 @@ class FileSource(Source):
 
     def flush(self):
         self._write_position()
+
+    def poll_makes_sense(self):
+        return False
 
     def fileno(self):
         if self.fh is None:
@@ -217,9 +293,13 @@ class UDPSource(Source):
         except (IOError, OSError):
             pass
 
-    def __del__(self):
+    def close(self):
         if self.socket is not None:
             self.socket.close()
+            self.socket = None
+
+    def __del__(self):
+        self.close()
 
     def fileno(self):
         if self.socket is None:
@@ -232,10 +312,11 @@ class UDPSource(Source):
                 msg = self.socket.recv(4096, socket.MSG_DONTWAIT)
                 yield msg.rstrip("\n")
         except socket.error, e:
-            if e.errno == errno.EWOULDBLOCK:
+            if e.errno == errno.EWOULDBLOCK or e.errno == errno.EAGAIN:
                 # this is expected when there's nothing in the socket queue
                 return
-            raise e
+            else:
+                raise # other error, rethrow
 
     def __str__(self):
         if self.host == "":
@@ -252,17 +333,22 @@ class UNIXSource(Source):
         self.path = path
         self.socket = None
 
-    def __del__(self):
+    def close(self):
         if self.socket is not None:
             self.socket.close()
+            self.socket = None
             os.unlink(self.path)
+
+    def __del__(self):
+        self.close()
 
     def open(self):
         try:
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
             sock.bind(self.path)
             self.socket = sock
-        except (IOError, OSError):
+        except (IOError, OSError), e:
+            print str(e)
             pass
 
     def fileno(self):
@@ -276,10 +362,11 @@ class UNIXSource(Source):
                 msg = self.socket.recv(4096, socket.MSG_DONTWAIT)
                 yield msg.rstrip("\n")
         except socket.error, e:
-            if e.errno == errno.EWOULDBLOCK:
+            if e.errno == errno.EWOULDBLOCK or e.errno == errno.EAGAIN:
                 # this is expected when there's nothing in the socket queue
                 return
-            raise e
+            else:
+                raise # other error, rethrow
 
     def __str__(self):
         return "UNIX: %s" % (self.path)
