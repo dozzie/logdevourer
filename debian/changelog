@@ -1,3 +1,11 @@
+logdevourer (0.2.0-1) stable; urgency=low
+
+  * Added operation mode: reading STDIN and writing to STDOUT
+  * Changed "%*:rest%" behaviour: don't replace fields from parse rule
+  * Added documentation
+
+ -- Stanislaw Klekot <dozzie@k.pl>  Mon, 21 Mar 2016 12:49:48 +0100
+
 logdevourer (0.1.0-1) stable; urgency=low
 
   * Initial release.
